@@ -70,6 +70,25 @@ constexpr Endianness getCurrentEndianness() {
   return endian_test.u8 == 0x01 ? Endianness::CDR_BIG_ENDIAN : Endianness::CDR_LITTLE_ENDIAN;
 }
 
+template <typename T>
+inline void swapEndianness(T& val) {
+  static_assert(std::is_arithmetic_v<T>, "swapEndianness: T must be an arithmetic type");
+  if constexpr (sizeof(T) == 2) {
+    uint8_t* ptr = reinterpret_cast<uint8_t*>(&val);
+    std::swap(ptr[0], ptr[1]);
+  } else if constexpr (sizeof(T) == 4) {
+    uint8_t* ptr = reinterpret_cast<uint8_t*>(&val);
+    std::swap(ptr[0], ptr[3]);
+    std::swap(ptr[1], ptr[2]);
+  } else if constexpr (sizeof(T) == 8) {
+    uint8_t* ptr = reinterpret_cast<uint8_t*>(&val);
+    std::swap(ptr[0], ptr[7]);
+    std::swap(ptr[1], ptr[6]);
+    std::swap(ptr[2], ptr[5]);
+    std::swap(ptr[3], ptr[4]);
+  }
+}
+
 struct CdrHeader {
   Endianness endianness = Endianness::CDR_LITTLE_ENDIAN;
   EncodingAlgorithmFlag encoding = EncodingAlgorithmFlag::PLAIN_CDR2;
@@ -108,12 +127,18 @@ inline void DecodeCdrHeader(ConstBuffer& buffer, CdrHeader& header) {
 //----------------------------------------------------------------------------------------
 
 template <typename T>
-inline void Decode(const CdrHeader&, ConstBuffer& buffer, T& out) {
-  static_assert(std::is_trivially_copyable_v<T>, "T must be trivially copyable");
+inline void Decode(const CdrHeader& header, ConstBuffer& buffer, T& out) {
+  static_assert(std::is_arithmetic_v<T>, "Default implementation for numeric values");
   if (buffer.size() < sizeof(T)) {
     throw std::runtime_error("Decode: not enough data to decode");
   }
   memcpy(&out, buffer.data(), sizeof(T));
+
+  if constexpr (sizeof(T) >= 2) {
+    if (header.endianness != getCurrentEndianness()) {
+      swapEndianness(out);
+    }
+  }
   buffer.trim_front(sizeof(T));
 }
 
@@ -145,12 +170,7 @@ inline void Decode(const CdrHeader& header, ConstBuffer& buffer, std::string& ou
 
 class Decoder {
  public:
-  Decoder(ConstBuffer& buffer) : buffer_(buffer) {
-    DecodeCdrHeader(buffer_, header_);
-    if (header_.endianness != getCurrentEndianness()) {
-      throw std::runtime_error("Encoder: endianness mismatch");
-    }
-  }
+  Decoder(ConstBuffer& buffer) : buffer_(buffer) { DecodeCdrHeader(buffer_, header_); }
 
   const CdrHeader& header() const { return header_; }
 
@@ -178,32 +198,36 @@ class Decoder {
 //----------------------------------------------------------------------------------------
 
 template <typename T>
-inline size_t Encode(const CdrHeader&, std::vector<uint8_t>& buffer, const T& in) {
-  static_assert(std::is_trivially_copyable_v<T>, "T must be trivially copyable");
+inline void Encode(const CdrHeader& header, std::vector<uint8_t>& buffer, const T& in) {
+  static_assert(std::is_arithmetic_v<T>, "Default implementation for numeric values");
   const auto prev_size = buffer.size();
   buffer.resize(prev_size + sizeof(T));
+  if constexpr (sizeof(T) >= 2) {
+    if (header.endianness != getCurrentEndianness()) {
+      T tmp = in;
+      swapEndianness(tmp);
+      memcpy(buffer.data() + prev_size, &tmp, sizeof(T));
+      return;
+    }
+  }
   memcpy(buffer.data() + prev_size, &in, sizeof(T));
-  return sizeof(T);
 }
 
 template <typename T, typename Allocator>
-inline size_t Encode(const CdrHeader& header, std::vector<uint8_t>& buffer, const std::vector<T, Allocator>& vect) {
-  const auto prev_size = buffer.size();
+inline void Encode(const CdrHeader& header, std::vector<uint8_t>& buffer, const std::vector<T, Allocator>& vect) {
   const uint32_t len = vect.size();
   Encode(header, buffer, len);
   for (const auto& item : vect) {
     Encode(header, buffer, item);
   }
-  return buffer.size() - prev_size;
 }
 
-inline size_t Encode(const CdrHeader& header, std::vector<uint8_t>& buffer, const std::string& in) {
+inline void Encode(const CdrHeader& header, std::vector<uint8_t>& buffer, const std::string& in) {
   const auto prev_size = buffer.size();
   const uint32_t str_len = in.size();
   Encode(header, buffer, str_len);
   buffer.resize(prev_size + str_len);
   memcpy(buffer.data() + prev_size, in.data(), str_len);
-  return buffer.size() - prev_size;
 }
 
 //----------------------------------------------------------------------------------------
@@ -225,13 +249,9 @@ inline size_t Size(const std::string& in) { return sizeof(uint32_t) + in.size();
 
 class Encoder {
  public:
-
   Encoder(CdrHeader header) : Encoder(header, default_storage_) {}
 
   Encoder(CdrHeader header, std::vector<uint8_t>& storage) : header_(header), storage_(&storage) {
-    if (header.endianness != getCurrentEndianness()) {
-      throw std::runtime_error("Encoder: endianness mismatch");
-    }
     storage_->clear();
     storage_->reserve(1024);
     storage_->resize(4);
