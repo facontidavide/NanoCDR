@@ -46,6 +46,11 @@ class Span {
 using Buffer = Span<uint8_t>;
 using ConstBuffer = Span<const uint8_t>;
 
+template <typename T>
+constexpr bool is_arithmetic() {
+  return std::is_arithmetic_v<T> || std::is_same_v<T, std::byte> || std::is_same_v<T, char>;
+}
+
 //----------------------------------------------------------------------------------------
 
 // CDR Header related types and constants
@@ -72,7 +77,7 @@ constexpr Endianness getCurrentEndianness() {
 
 template <typename T>
 inline void swapEndianness(T& val) {
-  static_assert(std::is_arithmetic_v<T>, "swapEndianness: T must be an arithmetic type");
+  static_assert(is_arithmetic<T>(), "swapEndianness: T must be an arithmetic type");
   if constexpr (sizeof(T) == 2) {
     uint8_t* ptr = reinterpret_cast<uint8_t*>(&val);
     std::swap(ptr[0], ptr[1]);
@@ -128,7 +133,7 @@ inline void DecodeCdrHeader(ConstBuffer& buffer, CdrHeader& header) {
 
 template <typename T>
 inline void Decode(const CdrHeader& header, ConstBuffer& buffer, T& out) {
-  static_assert(std::is_arithmetic_v<T>, "Default implementation for numeric values");
+  static_assert(is_arithmetic<T>(), "Default implementation for numeric values");
   if (buffer.size() < sizeof(T)) {
     throw std::runtime_error("Decode: not enough data to decode");
   }
@@ -199,7 +204,7 @@ class Decoder {
 
 template <typename T>
 inline void Encode(const CdrHeader& header, std::vector<uint8_t>& buffer, const T& in) {
-  static_assert(std::is_arithmetic_v<T>, "Default implementation for numeric values");
+  static_assert(is_arithmetic<T>(), "Default implementation for numeric values");
   const auto prev_size = buffer.size();
   buffer.resize(prev_size + sizeof(T));
   if constexpr (sizeof(T) >= 2) {
