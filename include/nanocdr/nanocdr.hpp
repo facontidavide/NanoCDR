@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstring>
 #include <stdexcept>
@@ -46,11 +47,7 @@ class Span {
 using Buffer = Span<uint8_t>;
 using ConstBuffer = Span<const uint8_t>;
 
-template <typename T>
-constexpr bool is_arithmetic() {
-  return std::is_arithmetic_v<T> || std::is_same_v<T, std::byte> || std::is_same_v<T, char>;
-}
-
+//----------------------------------------------------------------------------------------
 //----------------------------------------------------------------------------------------
 
 // CDR Header related types and constants
@@ -65,6 +62,167 @@ enum class EncodingAlgorithmFlag : uint8_t {
 };
 
 enum class Endianness : uint8_t { CDR_LITTLE_ENDIAN = 0x00, CDR_BIG_ENDIAN = 0x01 };
+
+constexpr Endianness getCurrentEndianness();
+
+template <typename T>
+inline void swapEndianness(T& val);
+
+struct CdrHeader {
+  Endianness endianness = Endianness::CDR_LITTLE_ENDIAN;
+  EncodingAlgorithmFlag encoding = EncodingAlgorithmFlag::PLAIN_CDR2;
+  CdrVersion version = CdrVersion::XCDRv2;
+  uint8_t options = 0;  // Reserved for future use
+};
+
+void EncodeCdrHeader(Buffer& buffer, const CdrHeader& header);
+void DecodeCdrHeader(ConstBuffer& buffer, CdrHeader& header);
+
+//----------------------------------------------------------------------------------------
+//----------------------------------------------------------------------------------------
+
+/**
+ * @brief TypeDefinition is a template class that defines the encoding and decoding of a type.
+ *
+ * Example usage. Given a struct:
+ * @code
+ * struct MyType {
+ *   int a;
+ *   float b;
+ * };
+ * @endcode
+ *
+ * You should define a specialization of TypeDefinition for your type:
+ * @code
+ * namespace nanocdr {
+ * template <> struct TypeDefinition<MyType> {
+ *   template <class Operator>
+ *   void operator()(MyType& obj, Operator& op) {
+ *     op(obj.a);
+ *     op(obj.b);
+ *   }
+ * };
+ * }
+ * @endcode
+ */
+template <class Type>
+struct TypeDefinition {
+  TypeDefinition() = delete;
+
+  template <class Operator>
+  void operator()(Type& obj, Operator& op);
+};
+
+//----------------------------------------------------------------------------------------
+//----------------------------------------------------------------------------------------
+/**
+ * @brief Decoder is a class that decodes data from a buffer.
+ */
+class Decoder {
+ public:
+  Decoder(ConstBuffer& buffer);
+
+  const CdrHeader& header() const { return header_; }
+
+  /**
+   * @brief Decode a single value from the buffer.
+   *
+   * @tparam T The type of the value to decode.
+   * @param out The value to decode into.
+   */
+  template <typename T>
+  void decode(T& out);
+
+  // specializations for std::vector
+  template <typename T, typename Allocator>
+  void decode(std::vector<T, Allocator>& out);
+
+  // specializations for std::array
+  template <typename T, size_t N>
+  void decode(std::array<T, N>& out);
+
+  // specializations for std::string
+  void decode(std::string& out);
+
+  // Move forwardthe pointer of the buffer
+  void jump(size_t offset) { buffer_.trim_front(offset); }
+
+  /// Get a view to the current buffer (bytes left to decode)
+  ConstBuffer currentBuffer() const { return buffer_; }
+
+ private:
+  ConstBuffer buffer_;
+  CdrHeader header_;
+};
+
+//----------------------------------------------------------------------------------------
+//----------------------------------------------------------------------------------------
+//----------------------------------------------------------------------------------------
+
+/**
+ * @brief Encoder is a class that encodes data into a buffer.
+ */
+class Encoder {
+ public:
+  // Use this constructor if you want the encoder to use its own internal buffer.
+  // You can copy it later using encodedBuffer()
+  Encoder(CdrHeader header) : Encoder(header, default_storage_) {}
+
+  // Use this constructor if you alredy have a buffer to encode into
+  Encoder(CdrHeader header, std::vector<uint8_t>& storage);
+
+  const CdrHeader& header() const { return header_; }
+
+  /**
+   * @brief Encode a single value into the buffer.
+   *
+   * @tparam T The type of the value to encode.
+   * @param in The value to encode.
+   */
+  template <typename T>
+  void encode(const T& in);
+
+  // specializations for std::string
+  void encode(const std::string& in);
+
+  // specializations for std::vector
+  template <typename T, typename Allocator>
+  void encode(const std::vector<T, Allocator>& in);
+
+  // specialization for std::array
+  template <typename T, size_t N>
+  void encode(const std::array<T, N>& in);
+
+  // Get a view to the current buffer (bytes already encoded)
+  ConstBuffer encodedBuffer() const { return ConstBuffer(storage_->data(), storage_->size()); }
+
+ private:
+  CdrHeader header_;
+  std::vector<uint8_t> default_storage_;
+  std::vector<uint8_t>* storage_ = nullptr;
+};
+
+//----------------------------------------------------------------------------------------
+//----------------------------------------------------------------------------------------
+// Implementation
+//----------------------------------------------------------------------------------------
+//----------------------------------------------------------------------------------------
+
+template <typename T>
+constexpr bool is_arithmetic() {
+  return std::is_arithmetic_v<T> || std::is_same_v<T, std::byte> || std::is_same_v<T, char>;
+}
+
+template <typename T, class = void>
+struct is_type_defined : std::false_type {};
+
+template <typename T>
+struct is_type_defined<T, decltype(TypeDefinition<T>(), void())> : std::true_type {};
+
+template <typename T>
+constexpr bool is_type_defined_v() {
+  return is_type_defined<T>::value;
+}
 
 constexpr Endianness getCurrentEndianness() {
   union {
@@ -94,13 +252,6 @@ inline void swapEndianness(T& val) {
   }
 }
 
-struct CdrHeader {
-  Endianness endianness = Endianness::CDR_LITTLE_ENDIAN;
-  EncodingAlgorithmFlag encoding = EncodingAlgorithmFlag::PLAIN_CDR2;
-  CdrVersion version = CdrVersion::XCDRv2;
-  uint8_t options = 0;  // Reserved for future use
-};
-
 inline void EncodeCdrHeader(Buffer& buffer, const CdrHeader& header) {
   if (buffer.size() < sizeof(CdrHeader)) {
     throw std::runtime_error("EncodeCdrHeader: not enough space in buffer");
@@ -129,160 +280,111 @@ inline void DecodeCdrHeader(ConstBuffer& buffer, CdrHeader& header) {
   buffer.trim_front(sizeof(CdrHeader));
 }
 
-//----------------------------------------------------------------------------------------
-
-template <typename T>
-inline void Decode(const CdrHeader& header, ConstBuffer& buffer, T& out) {
-  static_assert(is_arithmetic<T>(), "Default implementation for numeric values");
-  if (buffer.size() < sizeof(T)) {
-    throw std::runtime_error("Decode: not enough data to decode");
-  }
-  memcpy(&out, buffer.data(), sizeof(T));
-
-  if constexpr (sizeof(T) >= 2) {
-    if (header.endianness != getCurrentEndianness()) {
-      swapEndianness(out);
-    }
-  }
-  buffer.trim_front(sizeof(T));
-}
+Decoder::Decoder(ConstBuffer& buffer) : buffer_(buffer) { DecodeCdrHeader(buffer_, header_); }
 
 template <typename T, typename Allocator>
-inline void Decode(const CdrHeader& header, ConstBuffer& buffer, std::vector<T, Allocator>& out) {
-  if (std::is_trivially_copyable_v<T> && buffer.size() < sizeof(T)) {
-    throw std::runtime_error("Decode: not enough data to decode");
-  }
+void Decoder::decode(std::vector<T, Allocator>& out) {
   uint32_t len = 0;
-  Decode(header, buffer, len);
+  decode(len);
+  std::cout << "len: " << len << std::endl;
   out.resize(len);
   for (uint32_t i = 0; i < len; i++) {
-    Decode(header, buffer, out[i]);
+    decode(out[i]);
   }
 }
 
-inline void Decode(const CdrHeader& header, ConstBuffer& buffer, std::string& out) {
+template <typename T, size_t N>
+void Decoder::decode(std::array<T, N>& out) {
+  for (uint32_t i = 0; i < out.size(); i++) {
+    decode(out[i]);
+  }
+}
+
+void Decoder::decode(std::string& out) {
   uint32_t len = 0;
-  Decode(header, buffer, len);
-  if (buffer.size() < len) {
+  decode(len);
+  if (buffer_.size() < len) {
     throw std::runtime_error("Decode: not enough data to decode (string)");
   }
   out.resize(len);
-  memcpy(out.data(), buffer.data(), len);
-  buffer.trim_front(len);
+  memcpy(out.data(), buffer_.data(), len);
+  buffer_.trim_front(len);
 }
 
-//----------------------------------------------------------------------------------------
-
-class Decoder {
- public:
-  Decoder(ConstBuffer& buffer) : buffer_(buffer) { DecodeCdrHeader(buffer_, header_); }
-
-  const CdrHeader& header() const { return header_; }
-
-  template <typename T, typename Allocator>
-  void decode(std::vector<T, Allocator>& out) {
-    Decode(header_, buffer_, out);
-  }
-
-  void decode(std::string& out) { Decode(header_, buffer_, out); }
-
-  template <typename T>
-  void decode(T& out) {
-    Decode(header_, buffer_, out);
-  }
-
-  ConstBuffer currentBuffer() const { return buffer_; }
-
- private:
-  ConstBuffer buffer_;
-  CdrHeader header_;
-};
-
-//----------------------------------------------------------------------------------------
-//----------------------------------------------------------------------------------------
-//----------------------------------------------------------------------------------------
-
 template <typename T>
-inline void Encode(const CdrHeader& header, std::vector<uint8_t>& buffer, const T& in) {
-  static_assert(is_arithmetic<T>(), "Default implementation for numeric values");
-  const auto prev_size = buffer.size();
-  buffer.resize(prev_size + sizeof(T));
-  if constexpr (sizeof(T) >= 2) {
-    if (header.endianness != getCurrentEndianness()) {
-      T tmp = in;
-      swapEndianness(tmp);
-      memcpy(buffer.data() + prev_size, &tmp, sizeof(T));
-      return;
+void Decoder::decode(T& out) {
+  if constexpr (is_arithmetic<T>()) {
+    if (buffer_.size() < sizeof(T)) {
+      throw std::runtime_error("Decode: not enough data to decode");
     }
+    memcpy(&out, buffer_.data(), sizeof(T));
+
+    if constexpr (sizeof(T) >= 2) {
+      if (header_.endianness != getCurrentEndianness()) {
+        swapEndianness(out);
+      }
+    }
+    buffer_.trim_front(sizeof(T));
+    return;
   }
-  memcpy(buffer.data() + prev_size, &in, sizeof(T));
-}
-
-template <typename T, typename Allocator>
-inline void Encode(const CdrHeader& header, std::vector<uint8_t>& buffer, const std::vector<T, Allocator>& vect) {
-  const uint32_t len = vect.size();
-  Encode(header, buffer, len);
-  for (const auto& item : vect) {
-    Encode(header, buffer, item);
+  if constexpr (is_type_defined_v<T>()) {
+    auto op = [this](auto& obj) { decode(obj); };
+    TypeDefinition<T>().operator()(out, op);
   }
 }
 
-inline void Encode(const CdrHeader& header, std::vector<uint8_t>& buffer, const std::string& in) {
-  const auto prev_size = buffer.size();
-  const uint32_t str_len = in.size();
-  Encode(header, buffer, str_len);
-  buffer.resize(prev_size + str_len);
-  memcpy(buffer.data() + prev_size, in.data(), str_len);
+Encoder::Encoder(CdrHeader header, std::vector<uint8_t>& storage) : header_(header), storage_(&storage) {
+  storage_->clear();
+  storage_->reserve(1024);
+  storage_->resize(4);
+  Buffer buffer(*storage_);
+  EncodeCdrHeader(buffer, header_);
 }
-
-//----------------------------------------------------------------------------------------
 
 template <typename T>
-inline size_t Size(const T& in) {
-  static_assert(std::is_trivially_copyable_v<T>, "T must be trivially copyable");
-  return sizeof(T);
+void Encoder::encode(const T& in) {
+  if constexpr (is_arithmetic<T>()) {
+    const auto prev_size = storage_->size();
+    storage_->resize(prev_size + sizeof(T));
+    if constexpr (sizeof(T) >= 2) {
+      if (header_.endianness != getCurrentEndianness()) {
+        T tmp = in;
+        swapEndianness(tmp);
+        memcpy(storage_->data() + prev_size, &tmp, sizeof(T));
+        return;
+      }
+    }
+    memcpy(storage_->data() + prev_size, &in, sizeof(T));
+    return;
+  }
+  if constexpr (is_type_defined_v<T>()) {
+    auto op = [this](auto& obj) { encode(obj); };
+    TypeDefinition<T>().operator()(const_cast<T&>(in), op);
+  }
+}
+
+void Encoder::encode(const std::string& in) {
+  const auto prev_size = storage_->size();
+  const uint32_t str_len = in.size();
+  encode(str_len);
+  storage_->resize(prev_size + str_len);
+  memcpy(storage_->data() + prev_size, in.data(), str_len);
 }
 
 template <typename T, typename Allocator>
-inline size_t Size(const std::vector<T, Allocator>& in) {
-  return sizeof(uint32_t) + in.size() * Size<T>();
+void Encoder::encode(const std::vector<T, Allocator>& in) {
+  const uint32_t len = in.size();
+  encode(len);
+  for (const auto& item : in) {
+    encode(item);
+  }
 }
 
-inline size_t Size(const std::string& in) { return sizeof(uint32_t) + in.size(); }
-
-//----------------------------------------------------------------------------------------
-
-class Encoder {
- public:
-  Encoder(CdrHeader header) : Encoder(header, default_storage_) {}
-
-  Encoder(CdrHeader header, std::vector<uint8_t>& storage) : header_(header), storage_(&storage) {
-    storage_->clear();
-    storage_->reserve(1024);
-    storage_->resize(4);
-    Buffer buffer(*storage_);
-    EncodeCdrHeader(buffer, header_);
+template <typename T, size_t N>
+void Encoder::encode(const std::array<T, N>& in) {
+  for (const auto& item : in) {
+    encode(item);
   }
-
-  const CdrHeader& header() const { return header_; }
-
-  template <typename T>
-  void encode(const T& in) {
-    Encode(header_, *storage_, in);
-  }
-  template <typename T, typename Allocator>
-  void encode(const std::vector<T, Allocator>& in) {
-    Encode(header_, *storage_, in);
-  }
-
-  void encode(const std::string& in) { Encode(header_, *storage_, in); }
-
-  ConstBuffer encodedBuffer() const { return ConstBuffer(storage_->data(), storage_->size()); }
-
- private:
-  CdrHeader header_;
-  std::vector<uint8_t> default_storage_;
-  std::vector<uint8_t>* storage_ = nullptr;
-};
+}
 
 }  // namespace nanocdr

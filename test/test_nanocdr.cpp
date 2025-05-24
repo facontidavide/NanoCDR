@@ -2,6 +2,8 @@
 
 #include "nanocdr/nanocdr.hpp"
 
+// Custom type to test TypeDefinition
+
 struct Position {
   float x;
   float y;
@@ -22,43 +24,34 @@ struct Pose {
 
 namespace nanocdr {
 template <>
-void Encode(const CdrHeader& header, std::vector<uint8_t>& buffer, const Position& in) {
-  Encode(header, buffer, in.x);
-  Encode(header, buffer, in.y);
-  Encode(header, buffer, in.z);
-}
-template <>
-void Decode(const CdrHeader& header, ConstBuffer& buffer, Position& out) {
-  Decode(header, buffer, out.x);
-  Decode(header, buffer, out.y);
-  Decode(header, buffer, out.z);
-}
+struct TypeDefinition<Position> {
+  template <class Operator>
+  void operator()(Position& obj, Operator& op) {
+    op(obj.x);
+    op(obj.y);
+    op(obj.z);
+  }
+};
 
 template <>
-void Encode(const CdrHeader& header, std::vector<uint8_t>& buffer, const Quaternion& in) {
-  Encode(header, buffer, in.w);
-  Encode(header, buffer, in.x);
-  Encode(header, buffer, in.y);
-  Encode(header, buffer, in.z);
-}
-template <>
-void Decode(const CdrHeader& header, ConstBuffer& buffer, Quaternion& out) {
-  Decode(header, buffer, out.w);
-  Decode(header, buffer, out.x);
-  Decode(header, buffer, out.y);
-  Decode(header, buffer, out.z);
-}
+struct TypeDefinition<Quaternion> {
+  template <class Operator>
+  void operator()(Quaternion& obj, Operator& op) {
+    op(obj.w);
+    op(obj.x);
+    op(obj.y);
+    op(obj.z);
+  }
+};
 
 template <>
-void Encode(const CdrHeader& header, std::vector<uint8_t>& buffer, const Pose& in) {
-  Encode(header, buffer, in.position);
-  Encode(header, buffer, in.orientation);
-}
-template <>
-void Decode(const CdrHeader& header, ConstBuffer& buffer, Pose& out) {
-  Decode(header, buffer, out.position);
-  Decode(header, buffer, out.orientation);
-}
+struct TypeDefinition<Pose> {
+  template <class Operator>
+  void operator()(Pose& obj, Operator& op) {
+    op(obj.position);
+    op(obj.orientation);
+  }
+};
 }  // namespace nanocdr
 
 //----------------------------------------------------------------------------------------
@@ -83,6 +76,8 @@ int main() {
   encoder.encode(str);
 
   auto buffer = encoder.encodedBuffer();
+
+  std::cout << "Encoded size in bytes: " << buffer.size() << std::endl;
 
   // ----- decode -----
 
