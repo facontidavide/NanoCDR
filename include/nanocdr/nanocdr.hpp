@@ -1,3 +1,18 @@
+// Copyright 2025 Davide Faconti
+// Copyright 2016 Proyectos y Sistemas de Mantenimiento SL (eProsima).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #pragma once
 
 #include <array>
@@ -51,9 +66,9 @@ using ConstBuffer = Span<const uint8_t>;
 //----------------------------------------------------------------------------------------
 
 // CDR Header related types and constants
-enum class CdrVersion : uint8_t { CORBA_CDR = 0, DDS_CDR = 1, XCDRv1 = 2, XCDRv2 = 3 };
+enum class CdrVersion : uint8_t { DDS_CDR = 1, XCDRv1 = 2, XCDRv2 = 3 };
 
-enum class EncodingAlgorithmFlag : uint8_t {
+enum class EncodingFlag : uint8_t {
   PLAIN_CDR = 0x0,
   PL_CDR = 0x2,
   PLAIN_CDR2 = 0x6,
@@ -70,13 +85,9 @@ inline void swapEndianness(T& val);
 
 struct CdrHeader {
   Endianness endianness = Endianness::CDR_LITTLE_ENDIAN;
-  EncodingAlgorithmFlag encoding = EncodingAlgorithmFlag::PLAIN_CDR2;
-  CdrVersion version = CdrVersion::XCDRv2;
-  uint8_t options = 0;  // Reserved for future use
+  EncodingFlag encoding = EncodingFlag::PLAIN_CDR;
+  CdrVersion version = CdrVersion::DDS_CDR;
 };
-
-void EncodeCdrHeader(Buffer& buffer, const CdrHeader& header);
-void DecodeCdrHeader(ConstBuffer& buffer, CdrHeader& header);
 
 //----------------------------------------------------------------------------------------
 //----------------------------------------------------------------------------------------
@@ -120,7 +131,7 @@ struct TypeDefinition {
  */
 class Decoder {
  public:
-  Decoder(ConstBuffer& buffer);
+  Decoder(ConstBuffer buffer, CdrVersion default_cdr = CdrVersion::DDS_CDR);
 
   const CdrHeader& header() const { return header_; }
 
@@ -152,7 +163,14 @@ class Decoder {
 
  private:
   ConstBuffer buffer_;
+  const uint8_t* origin_ = nullptr;
   CdrHeader header_;
+
+  size_t alignment(size_t data_size) const {
+    data_size = (data_size == 8) ? align64_ : data_size;
+    return (data_size - ((buffer_.data() - origin_) % data_size)) & (data_size - 1);
+  }
+  size_t align64_ = 8;
 };
 
 //----------------------------------------------------------------------------------------
@@ -200,6 +218,13 @@ class Encoder {
   CdrHeader header_;
   std::vector<uint8_t> default_storage_;
   std::vector<uint8_t>* storage_ = nullptr;
+  const uint8_t* origin_ = nullptr;
+  size_t align64_ = 8;
+
+  size_t alignment(size_t data_size) const {
+    data_size = (data_size == 8) ? align64_ : data_size;
+    return (data_size - ((storage_->size() - 4) % data_size)) & (data_size - 1);
+  }
 };
 
 //----------------------------------------------------------------------------------------
@@ -252,41 +277,51 @@ inline void swapEndianness(T& val) {
   }
 }
 
-inline void EncodeCdrHeader(Buffer& buffer, const CdrHeader& header) {
-  if (buffer.size() < sizeof(CdrHeader)) {
-    throw std::runtime_error("EncodeCdrHeader: not enough space in buffer");
+inline Decoder::Decoder(ConstBuffer buffer, CdrVersion default_cdr) : buffer_(buffer), origin_(buffer.data() + 4) {
+  const auto* ptr = buffer_.data();
+  uint8_t dummy = ptr[0];
+  if (dummy != 0) {
+    throw std::runtime_error("Invalid CDR header: expected first byte to be 0");
   }
 
-  uint8_t* ptr = buffer.data();
-  ptr[0] = static_cast<uint8_t>(header.endianness);
-  ptr[1] = static_cast<uint8_t>(header.encoding);
-  ptr[2] = static_cast<uint8_t>(header.version);
-  ptr[3] = header.options;
+  const uint8_t encapsulation = ptr[1];
+  header_.endianness = static_cast<Endianness>(encapsulation & 0x18);
+  header_.encoding = static_cast<EncodingFlag>(encapsulation & static_cast<uint8_t>(~0x1));
+  header_.version = default_cdr;
 
-  buffer.trim_front(sizeof(CdrHeader));
-}
-
-inline void DecodeCdrHeader(ConstBuffer& buffer, CdrHeader& header) {
-  if (buffer.size() < sizeof(CdrHeader)) {
-    throw std::runtime_error("DecodeCdrHeader: not enough data in buffer");
+  switch (header_.encoding) {
+    case EncodingFlag::PLAIN_CDR2:
+    case EncodingFlag::DELIMIT_CDR2:
+    case EncodingFlag::PL_CDR2:
+      if (CdrVersion::XCDRv1 <= header_.version) {
+        header_.version = CdrVersion::XCDRv2;
+      } else {
+        throw std::runtime_error("Unexpected encoding received.");
+      }
+      break;
+    case EncodingFlag::PL_CDR:
+      if (CdrVersion::XCDRv1 <= header_.version) {
+        header_.version = CdrVersion::XCDRv1;
+      } else {
+        throw std::runtime_error("Unexpected encoding received.");
+      }
+      break;
+    case EncodingFlag::PLAIN_CDR:
+      if (CdrVersion::XCDRv1 <= header_.version) {
+        header_.version = CdrVersion::XCDRv1;
+      }
+      break;
+    default:
+      throw std::runtime_error("Unexpected encoding received.");
   }
-
-  const uint8_t* ptr = buffer.data();
-  header.endianness = static_cast<Endianness>(ptr[0]);
-  header.encoding = static_cast<EncodingAlgorithmFlag>(ptr[1]);
-  header.version = static_cast<CdrVersion>(ptr[2]);
-  header.options = ptr[3];
-
-  buffer.trim_front(sizeof(CdrHeader));
+  align64_ = (header_.version == CdrVersion::XCDRv2) ? 4 : 8;
+  buffer_.trim_front(4);  // Remove the header from the buffer
 }
-
-Decoder::Decoder(ConstBuffer& buffer) : buffer_(buffer) { DecodeCdrHeader(buffer_, header_); }
 
 template <typename T, typename Allocator>
-void Decoder::decode(std::vector<T, Allocator>& out) {
+inline void Decoder::decode(std::vector<T, Allocator>& out) {
   uint32_t len = 0;
   decode(len);
-  std::cout << "len: " << len << std::endl;
   out.resize(len);
   for (uint32_t i = 0; i < len; i++) {
     decode(out[i]);
@@ -294,26 +329,44 @@ void Decoder::decode(std::vector<T, Allocator>& out) {
 }
 
 template <typename T, size_t N>
-void Decoder::decode(std::array<T, N>& out) {
+inline void Decoder::decode(std::array<T, N>& out) {
   for (uint32_t i = 0; i < out.size(); i++) {
     decode(out[i]);
   }
 }
 
-void Decoder::decode(std::string& out) {
+inline void Decoder::decode(std::string& out) {
   uint32_t len = 0;
   decode(len);
   if (buffer_.size() < len) {
-    throw std::runtime_error("Decode: not enough data to decode (string)");
+    throw std::runtime_error("Decode: not enough data to decode (string). Size: " + std::to_string(len));
   }
-  out.resize(len);
-  memcpy(out.data(), buffer_.data(), len);
+
+  auto* str_ptr = buffer_.data();
   buffer_.trim_front(len);
+
+  // check if last character is a null terminator
+  auto str_len = len;
+  if (len > 0 && str_ptr[len - 1] == '\0') {
+    str_len--;
+  }
+
+  out.resize(str_len);
+  if (str_len > 0) {
+    memcpy(out.data(), str_ptr, str_len);
+  }
 }
 
 template <typename T>
-void Decoder::decode(T& out) {
+inline void Decoder::decode(T& out) {
+  static_assert(is_arithmetic<T>() || is_type_defined_v<T>(), "decode: T must be an arithmetic type or a defined type");
+
   if constexpr (is_arithmetic<T>()) {
+    const size_t align = alignment(sizeof(T));
+    if (align > 0) {
+      buffer_.trim_front(align);
+    }
+
     if (buffer_.size() < sizeof(T)) {
       throw std::runtime_error("Decode: not enough data to decode");
     }
@@ -333,17 +386,25 @@ void Decoder::decode(T& out) {
   }
 }
 
-Encoder::Encoder(CdrHeader header, std::vector<uint8_t>& storage) : header_(header), storage_(&storage) {
+inline Encoder::Encoder(CdrHeader header, std::vector<uint8_t>& storage) : header_(header), storage_(&storage) {
   storage_->clear();
   storage_->reserve(1024);
   storage_->resize(4);
   Buffer buffer(*storage_);
-  EncodeCdrHeader(buffer, header_);
+  align64_ = (header_.version == CdrVersion::XCDRv2) ? 4 : 8;
+  origin_ = storage_->data() + 4;
 }
 
 template <typename T>
-void Encoder::encode(const T& in) {
+inline void Encoder::encode(const T& in) {
+  static_assert(is_arithmetic<T>() || is_type_defined_v<T>(), "encode: T must be an arithmetic type or a defined type");
   if constexpr (is_arithmetic<T>()) {
+    if constexpr (sizeof(T) >= 2) {
+      const auto align = alignment(sizeof(T));
+      if (align > 0) {
+        storage_->resize(storage_->size() + align);
+      }
+    }
     const auto prev_size = storage_->size();
     storage_->resize(prev_size + sizeof(T));
     if constexpr (sizeof(T) >= 2) {
@@ -363,16 +424,16 @@ void Encoder::encode(const T& in) {
   }
 }
 
-void Encoder::encode(const std::string& in) {
-  const auto prev_size = storage_->size();
+inline void Encoder::encode(const std::string& in) {
   const uint32_t str_len = in.size();
   encode(str_len);
+  const auto prev_size = storage_->size();
   storage_->resize(prev_size + str_len);
   memcpy(storage_->data() + prev_size, in.data(), str_len);
 }
 
 template <typename T, typename Allocator>
-void Encoder::encode(const std::vector<T, Allocator>& in) {
+inline void Encoder::encode(const std::vector<T, Allocator>& in) {
   const uint32_t len = in.size();
   encode(len);
   for (const auto& item : in) {
@@ -381,7 +442,7 @@ void Encoder::encode(const std::vector<T, Allocator>& in) {
 }
 
 template <typename T, size_t N>
-void Encoder::encode(const std::array<T, N>& in) {
+inline void Encoder::encode(const std::array<T, N>& in) {
   for (const auto& item : in) {
     encode(item);
   }

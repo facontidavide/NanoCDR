@@ -22,6 +22,15 @@ struct Pose {
   Quaternion orientation;
 };
 
+struct ComplexType {
+  int32_t int32;
+  double double_value;
+  float float_value;
+  std::string str;
+  Pose pose;
+  std::vector<int32_t> vec;
+};
+
 namespace nanocdr {
 template <>
 struct TypeDefinition<Position> {
@@ -52,6 +61,19 @@ struct TypeDefinition<Pose> {
     op(obj.orientation);
   }
 };
+
+template <>
+struct TypeDefinition<ComplexType> {
+  template <class Operator>
+  void operator()(ComplexType& obj, Operator& op) {
+    op(obj.int32);
+    op(obj.double_value);
+    op(obj.float_value);
+    op(obj.str);
+    op(obj.pose);
+    op(obj.vec);
+  }
+};
 }  // namespace nanocdr
 
 //----------------------------------------------------------------------------------------
@@ -62,53 +84,33 @@ int main() {
 
   Encoder encoder(CdrHeader{});
 
-  encoder.encode((int32_t(42)));
-  encoder.encode((double(3.14)));
-  encoder.encode((float(1.111)));
+  ComplexType complex_in = {
+      42, 3.14, 1.111, "Hello, World!", {{1.1f, 2.2f, 3.3f}, {0.1f, 0.2f, 0.3f, 0.4f}}, {1, 2, 3, 4, 5}};
 
-  std::vector<int64_t> vec_in = {1, 2, 3, 4, 5};
-  encoder.encode(vec_in);
-
-  Pose pose_in = {{1.1f, 2.2f, 3.3f}, {0.1f, 0.2f, 0.3f, 0.4f}};
-  encoder.encode(pose_in);
-
-  std::string str = "Hello, World!";
-  encoder.encode(str);
+  encoder.encode(complex_in);
 
   auto buffer = encoder.encodedBuffer();
-
   std::cout << "Encoded size in bytes: " << buffer.size() << std::endl;
 
   // ----- decode -----
 
   Decoder decoder(buffer);
+  ComplexType complex_out;
+  decoder.decode(complex_out);
 
-  int32_t int32;
-  decoder.decode(int32);
-  std::cout << "int32: " << int32 << std::endl;
-
-  double double_value;
-  decoder.decode(double_value);
-  std::cout << "double_value: " << double_value << std::endl;
-
-  float float_value;
-  decoder.decode(float_value);
-  std::cout << "float_value: " << float_value << std::endl;
-
-  std::vector<int64_t> vec_out;
-  decoder.decode(vec_out);
-  std::cout << "vec_out: ";
-  for (const auto& v : vec_out) {
+  std::cout << "int32: " << complex_out.int32 << std::endl;
+  std::cout << "double_value: " << complex_out.double_value << std::endl;
+  std::cout << "float_value: " << complex_out.float_value << std::endl;
+  std::cout << "str: " << complex_out.str << std::endl;
+  std::cout << "pose/position: " << complex_out.pose.position.x << ", " << complex_out.pose.position.y << ", "
+            << complex_out.pose.position.z << std::endl;
+  std::cout << "pose/orientation: " << complex_out.pose.orientation.w << ", " << complex_out.pose.orientation.x << ", "
+            << complex_out.pose.orientation.y << ", " << complex_out.pose.orientation.z << std::endl;
+  std::cout << "vec: ";
+  for (const auto& v : complex_out.vec) {
     std::cout << v << " ";
   }
   std::cout << std::endl;
-
-  Pose pose_out;
-  decoder.decode(pose_out);
-  std::cout << "position: " << pose_out.position.x << ", " << pose_out.position.y << ", " << pose_out.position.z
-            << std::endl;
-  std::cout << "orientation: " << pose_out.orientation.w << ", " << pose_out.orientation.x << ", "
-            << pose_out.orientation.y << ", " << pose_out.orientation.z << std::endl;
 
   return 0;
 }
