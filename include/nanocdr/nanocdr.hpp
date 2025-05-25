@@ -37,22 +37,36 @@ class Span {
   template <typename U, typename Allocator, typename = std::enable_if_t<!std::is_const_v<U>>>
   Span(std::vector<U, Allocator>& vec) : data_(vec.data()), size_(vec.size()) {}
 
-  T* data() const { return data_; }
-  size_t size() const { return size_; }
+  T* data() const {
+    return data_;
+  }
+  size_t size() const {
+    return size_;
+  }
 
-  T& operator[](size_t index) const { return data_[index]; }
+  T& operator[](size_t index) const {
+    return data_[index];
+  }
 
-  T* begin() const { return data_; }
-  T* end() const { return data_ + size_; }
+  T* begin() const {
+    return data_;
+  }
+  T* end() const {
+    return data_ + size_;
+  }
 
-  bool empty() const { return size_ == 0; }
+  bool empty() const {
+    return size_ == 0;
+  }
 
   void trim_front(size_t n) {
     data_ += n;
     size_ -= n;
   }
 
-  void trim_back(size_t n) { size_ -= n; }
+  void trim_back(size_t n) {
+    size_ -= n;
+  }
 
  private:
   T* data_ = nullptr;
@@ -133,7 +147,9 @@ class Decoder {
  public:
   Decoder(ConstBuffer buffer, CdrVersion default_cdr = CdrVersion::DDS_CDR);
 
-  const CdrHeader& header() const { return header_; }
+  const CdrHeader& header() const {
+    return header_;
+  }
 
   /**
    * @brief Decode a single value from the buffer.
@@ -156,10 +172,14 @@ class Decoder {
   void decode(std::string& out);
 
   // Move forwardthe pointer of the buffer
-  void jump(size_t offset) { buffer_.trim_front(offset); }
+  void jump(size_t offset) {
+    buffer_.trim_front(offset);
+  }
 
   /// Get a view to the current buffer (bytes left to decode)
-  ConstBuffer currentBuffer() const { return buffer_; }
+  ConstBuffer currentBuffer() const {
+    return buffer_;
+  }
 
  private:
   ConstBuffer buffer_;
@@ -189,7 +209,9 @@ class Encoder {
   // Use this constructor if you alredy have a buffer to encode into
   Encoder(CdrHeader header, std::vector<uint8_t>& storage);
 
-  const CdrHeader& header() const { return header_; }
+  const CdrHeader& header() const {
+    return header_;
+  }
 
   /**
    * @brief Encode a single value into the buffer.
@@ -212,7 +234,9 @@ class Encoder {
   void encode(const std::array<T, N>& in);
 
   // Get a view to the current buffer (bytes already encoded)
-  ConstBuffer encodedBuffer() const { return ConstBuffer(storage_->data(), storage_->size()); }
+  ConstBuffer encodedBuffer() const {
+    return ConstBuffer(storage_->data(), storage_->size());
+  }
 
  private:
   CdrHeader header_;

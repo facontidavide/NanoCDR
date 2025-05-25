@@ -19,5 +19,5 @@ AlignAfterOpenBracket: AlwaysBreak
 
 
 AllowShortBlocksOnASingleLine: Empty
-AllowShortFunctionsOnASingleLine: All
+AllowShortFunctionsOnASingleLine: Empty
 AllowShortIfStatementsOnASingleLine: Never
